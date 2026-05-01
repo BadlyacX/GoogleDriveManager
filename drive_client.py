@@ -1,6 +1,7 @@
 import io
 import os
 import sys
+import shutil
 import time
 import pickle
 from googleapiclient.discovery import build
@@ -16,12 +17,31 @@ def get_base_path():
 def get_appdata_dir():
     appdata = os.environ.get("APPDATA")
     base_dir = os.path.join(appdata, "GDM")
-
     os.makedirs(base_dir, exist_ok=True)
     return base_dir
 
 def get_token_path():
     return os.path.join(get_appdata_dir(), "token.pickle")
+
+def get_credentials_path():
+    return os.path.join(get_appdata_dir(), "credentials.json")
+
+def ensure_credentials():
+    target = get_credentials_path()
+
+    if os.path.exists(target):
+        return target
+
+    if getattr(sys, 'frozen', False):
+        source = os.path.join(sys._MEIPASS, "credentials.json")
+    else:
+        source = os.path.join(os.path.dirname(os.path.abspath(__file__)), "credentials.json")
+
+    if not os.path.exists(source):
+        raise Exception(f"找不到內建 credentials.json: {source}")
+
+    shutil.copy(source, target)
+    return target
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -34,7 +54,9 @@ class DriveClient:
 
     def _auth(self):
         creds = None
+
         token_path = get_token_path()
+        cred_path = ensure_credentials()
 
         if os.path.exists(token_path):
             with open(token_path, 'rb') as token:
@@ -44,7 +66,9 @@ class DriveClient:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
-                cred_path = self.get_credentials_path()
+                if not os.path.exists(cred_path):
+                    raise Exception("找不到 credentials.json（請放到 AppData\\GDM）")
+
                 flow = InstalledAppFlow.from_client_secrets_file(
                     cred_path,
                     SCOPES
