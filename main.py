@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from drive_client import DriveClient, FOLDER_MIME
 from download_worker import DownloadWorker
+from drive_client import get_token_path
 
 class DriveTree(QTreeWidget):
     def __init__(self, parent):
@@ -162,6 +163,8 @@ class MainWindow(QMainWindow):
 
         self.search_box.setPlaceholderText("搜尋檔案...")
 
+        self.tree.setHeaderLabel("按住Ctrl可多選項目")
+
         self.btn_refresh.clicked.connect(self.load_root)
         self.btn_download.clicked.connect(self.download_selected)
         self.btn_delete.clicked.connect(self.delete_selected)
@@ -211,6 +214,7 @@ class MainWindow(QMainWindow):
 
         self.load_root()
         QTimer.singleShot(0, self.initialize_app)
+        QTimer.singleShot(0, self.auto_login)
 
     def initialize_app(self):
         if os.path.exists("token.pickle"):
@@ -493,6 +497,25 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             QMessageBox.warning(self, "搜尋錯誤", str(e))
+
+    def auto_login(self):
+        try:
+            self.client.service = self.client._auth()
+            email = self.client.get_user_email()
+
+            self.label_user.setText(f"已登入: {email}")
+            self.btn_login.hide()
+
+            self.load_root()
+
+        except Exception as e:
+            print("Auto login failed:", e)
+
+            token_path = get_token_path()
+            if os.path.exists(token_path):
+                os.remove(token_path)
+
+            self.label_user.setText("未登入")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

@@ -13,6 +13,16 @@ def get_base_path():
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
+def get_appdata_dir():
+    appdata = os.environ.get("APPDATA")
+    base_dir = os.path.join(appdata, "GDM")
+
+    os.makedirs(base_dir, exist_ok=True)
+    return base_dir
+
+def get_token_path():
+    return os.path.join(get_appdata_dir(), "token.pickle")
+
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 FOLDER_MIME = "application/vnd.google-apps.folder"
 BASE_DIR = get_base_path()
@@ -24,25 +34,27 @@ class DriveClient:
 
     def _auth(self):
         creds = None
+        token_path = get_token_path()
 
-        if os.path.exists("token.pickle"):
-            with open("token.pickle", "rb") as f:
-                creds = pickle.load(f)
+        if os.path.exists(token_path):
+            with open(token_path, 'rb') as token:
+                creds = pickle.load(token)
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
+                cred_path = self.get_credentials_path()
                 flow = InstalledAppFlow.from_client_secrets_file(
                     cred_path,
                     SCOPES
                 )
-                creds = flow.run_local_server(port=0, open_browser=True)
+                creds = flow.run_local_server(port=0)
 
-            with open("token.pickle", "wb") as f:
-                pickle.dump(creds, f)
+            with open(token_path, 'wb') as token:
+                pickle.dump(creds, token)
 
-        return build("drive", "v3", credentials=creds)
+        return build('drive', 'v3', credentials=creds)
     
     def has_token(self):
         return os.path.exists("token.pickle")
@@ -165,7 +177,6 @@ class DriveClient:
     def delete_file(self, file_id):
         self.service.files().delete(fileId=file_id).execute()
 
-    # 新增
     def ensure_auth(self):
         if not hasattr(self, "service") or self.service is None:
          self.service = self._auth()
@@ -184,3 +195,14 @@ class DriveClient:
             fields="files(id,name,mimeType,size)"
         ).execute()
         return res.get("files", [])
+    
+    def get_credentials_path(self):
+        import os
+        import sys
+
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+
+        return os.path.join(base_dir, "credentials.json")
