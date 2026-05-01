@@ -1,5 +1,6 @@
 import io
 import os
+import sys
 import time
 import pickle
 from googleapiclient.discovery import build
@@ -7,9 +8,14 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
+def get_base_path():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 FOLDER_MIME = "application/vnd.google-apps.folder"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = get_base_path()
 cred_path = os.path.join(BASE_DIR, "credentials.json")
 
 class DriveClient:
@@ -77,7 +83,7 @@ class DriveClient:
     def is_folder(self, file_data):
         return file_data.get("mimeType") == FOLDER_MIME
 
-    def download_file(self, file_id, path, progress_callback=None, retries=3):
+    def download_file(self, file_id, path, progress_callback=None, cancel_flag=None, retries=3):
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
         for attempt in range(retries):
@@ -85,13 +91,15 @@ class DriveClient:
                 request = self.service.files().get_media(fileId=file_id)
 
                 with io.FileIO(path, "wb") as fh:
-                    downloader = MediaIoBaseDownload(fh, request, chunksize=1024 * 1024)
+                    downloader = MediaIoBaseDownload(fh, request, chunksize=1024*1024)
 
                     done = False
                     start_time = time.time()
-                    last_bytes = 0
 
                     while not done:
+                        if cancel_flag and cancel_flag():
+                            raise Exception("CANCELLED")
+
                         status, done = downloader.next_chunk()
 
                         if status and progress_callback:
@@ -101,7 +109,6 @@ class DriveClient:
 
                             elapsed = max(time.time() - start_time, 0.001)
                             speed = downloaded / elapsed
-
                             remaining = max(total - downloaded, 0)
                             eta = int(remaining / speed) if speed > 0 else 0
 
@@ -109,10 +116,12 @@ class DriveClient:
 
                 return
 
-            except Exception:
+            except Exception as e:
+                if str(e) == "CANCELLED":
+                    raise
                 if attempt >= retries - 1:
                     raise
-                time.sleep(2 * (attempt + 1))
+                time.sleep(2)
 
     def create_folder(self, name, parent="root"):
         meta = {

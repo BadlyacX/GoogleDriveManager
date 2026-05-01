@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
 from drive_client import DriveClient, FOLDER_MIME
 from download_worker import DownloadWorker
 
-
 class DriveTree(QTreeWidget):
     def __init__(self, parent):
         super().__init__()
@@ -84,7 +83,10 @@ class TaskTable(QTableWidget):
 
     def __init__(self):
         super().__init__(0, 7)
-        self.setHorizontalHeaderLabels(["檔案", "進度", "速度", "ETA", "狀態"])
+        self.setHorizontalHeaderLabels([
+            "檔案", "進度", "速度", "ETA", 
+            "狀態", "取消", "重試"
+            ])
         self.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -318,9 +320,13 @@ class MainWindow(QMainWindow):
                 break
 
             worker = DownloadWorker(self.client, self.task_queue)
-            worker.task_started.connect(lambda task_id: self.tasks.set_status(task_id, "下載中"))
+            worker.task_started.connect(
+                lambda task_id: self.tasks.set_status(task_id, "下載中")
+                )
             worker.task_progress.connect(self.tasks.set_progress)
-            worker.task_finished.connect(lambda task_id: self.tasks.set_status(task_id, "完成"))
+            worker.task_finished.connect(
+                lambda task_id: self.tasks.set_status(task_id, "完成")
+                )
             worker.task_error.connect(self.on_task_error)
             worker.finished.connect(self.on_worker_finished)
 
@@ -476,6 +482,13 @@ class MainWindow(QMainWindow):
             for f in results:
                 item = QTreeWidgetItem([f["name"]])
                 item.setData(0, Qt.UserRole, f)
+
+                if f.get("mimeType") == FOLDER_MIME:
+                    item.setData(0, Qt.UserRole + 1, "not_loaded")
+                    item.addChild(QTreeWidgetItem(["Loading..."]))
+                else:
+                    item.setData(0, Qt.UserRole + 1, "file")
+
                 self.tree.addTopLevelItem(item)
 
         except Exception as e:
