@@ -522,5 +522,3 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
-
-# pyinstaller --onefile --windowed --collect-all google --hidden-import googleapiclient.discovery --hidden-import google_auth_oauthlib.flow --hidden-import google.auth.transport.requests main.py
