@@ -2,6 +2,7 @@
 /token.pickle
 /__pycache__
 /build
+/in
 /dist
 /.venv
 /main.spec
