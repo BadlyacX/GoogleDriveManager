@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from drive_client import DriveClient, FOLDER_MIME
 from download_worker import DownloadWorker
 from drive_client import get_token_path
+from path_utils import unique_path
 
 class DriveTree(QTreeWidget):
     def __init__(self, parent):
@@ -150,6 +151,9 @@ class MainWindow(QMainWindow):
         self.task_queue = queue.Queue()
         self.workers = []
         self.max_workers = 3
+        self.download_tasks = {}
+        self.reserved_download_paths = set()
+        self.cancelled_tasks = set()
 
         self.tree = DriveTree(self)
         self.tasks = TaskTable()
@@ -194,9 +198,6 @@ class MainWindow(QMainWindow):
         root.setLayout(layout)
         self.setCentralWidget(root)
 
-        self.client = DriveClient()
-        self.client.service = None
-        
         self.btn_login = QPushButton("登入 google")
         self.btn_login.clicked.connect(self.login)
 
@@ -213,11 +214,11 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.label_user)
 
         self.load_root()
-        QTimer.singleShot(0, self.initialize_app)
-        QTimer.singleShot(0, self.auto_login)
+        if not logged_in:
+            QTimer.singleShot(0, self.initialize_app)
 
     def initialize_app(self):
-        if os.path.exists("token.pickle"):
+        if os.path.exists(get_token_path()):
             try:
                 self.client.service = self.client._auth()
 
@@ -296,14 +297,16 @@ class MainWindow(QMainWindow):
 
         for file_data in files:
             task_id = str(uuid.uuid4())
-            path = os.path.join(target_dir, file_data["name"])
+            path = unique_path(target_dir, file_data["name"], self.reserved_download_paths)
 
             task = {
                 "task_id": task_id,
                 "file": file_data,
-                "target_path": path
+                "target_path": path,
+                "display_name": file_data["name"]
             }
 
+            self.download_tasks[task_id] = task
             self.task_queue.put(task)
 
             self.tasks.add_task(
@@ -323,7 +326,14 @@ class MainWindow(QMainWindow):
             if self.task_queue.empty():
                 break
 
-            worker = DownloadWorker(self.client, self.task_queue)
+            try:
+                worker_client = DriveClient()
+                worker_client.service = worker_client._auth()
+            except Exception as e:
+                QMessageBox.warning(self, "下載啟動失敗", str(e))
+                break
+
+            worker = DownloadWorker(worker_client, self.task_queue, self.cancelled_tasks)
             worker.task_started.connect(
                 lambda task_id: self.tasks.set_status(task_id, "下載中")
                 )
@@ -331,6 +341,7 @@ class MainWindow(QMainWindow):
             worker.task_finished.connect(
                 lambda task_id: self.tasks.set_status(task_id, "完成")
                 )
+            worker.task_cancelled.connect(self.on_task_cancelled)
             worker.task_error.connect(self.on_task_error)
             worker.finished.connect(self.on_worker_finished)
 
@@ -346,6 +357,9 @@ class MainWindow(QMainWindow):
     def on_task_error(self, task_id, message):
         self.tasks.set_status(task_id, "錯誤")
         QMessageBox.warning(self, "下載錯誤", message)
+
+    def on_task_cancelled(self, task_id):
+        self.tasks.set_status(task_id, "已取消")
 
     def delete_selected(self):
         files = self.selected_files()
@@ -443,35 +457,55 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "登入失敗", str(e))
 
     def cancel_task(self, task_id):
+        row = self.tasks.task_rows.get(task_id)
+        if row is not None:
+            status = self.tasks.item(row, self.tasks.COL_STATUS).text()
+            if status in ("完成", "錯誤", "已取消"):
+                return
+
+        self.cancelled_tasks.add(task_id)
         for w in self.workers:
-            w.stop()
-        self.tasks.set_status(task_id, "已取消")
+            w.cancel_task(task_id)
+        self.tasks.set_status(task_id, "取消中")
 
     def retry_task(self, task_id):
         row = self.tasks.task_rows.get(task_id)
         if row is None:
             return
 
-        name = self.tasks.item(row, 0).text()
+        status = self.tasks.item(row, self.tasks.COL_STATUS).text()
+        if status in ("等待中", "下載中", "取消中"):
+            QMessageBox.information(self, "無法重試", "此任務尚未結束")
+            return
 
-        for file_data in self.selected_files():
-            if file_data["name"] == name:
-                new_id = str(uuid.uuid4())
+        old_task = self.download_tasks.get(task_id)
+        if not old_task:
+            return
 
-                self.task_queue.put({
-                    "task_id": new_id,
-                    "file": file_data,
-                    "target_path": file_data["name"]
-                })
+        old_path = old_task["target_path"]
+        target_dir = os.path.dirname(old_path) or os.getcwd()
+        target_name = os.path.basename(old_path)
+        target_path = unique_path(target_dir, target_name, self.reserved_download_paths)
 
-                self.tasks.add_task(
-                    new_id,
-                    name,
-                    self.cancel_task,
-                    self.retry_task
-                )
+        new_id = str(uuid.uuid4())
+        new_task = {
+            "task_id": new_id,
+            "file": old_task["file"],
+            "target_path": target_path,
+            "display_name": old_task.get("display_name", target_name)
+        }
 
-                self.start_workers()
+        self.download_tasks[new_id] = new_task
+        self.task_queue.put(new_task)
+
+        self.tasks.add_task(
+            new_id,
+            new_task["display_name"],
+            self.cancel_task,
+            self.retry_task
+        )
+
+        self.start_workers()
 
     def search(self):
         text = self.search_box.text().strip()

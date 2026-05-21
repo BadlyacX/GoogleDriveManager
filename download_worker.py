@@ -2,6 +2,7 @@ import os
 import time
 import queue
 from PySide6.QtCore import QThread, Signal
+from path_utils import unique_path
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 
@@ -13,12 +14,12 @@ class DownloadWorker(QThread):
     task_cancelled = Signal(str)
     task_error = Signal(str, str)
 
-    def __init__(self, client, task_queue):
+    def __init__(self, client, task_queue, cancelled_tasks):
         super().__init__()
         self.client = client
         self.task_queue = task_queue
+        self.cancelled_tasks = cancelled_tasks
         self.running = True
-        self.cancelled_tasks = set()
 
     def run(self):
         while self.running:
@@ -44,14 +45,12 @@ class DownloadWorker(QThread):
                     self.download_single_file(file_data, target_path, task_id)
 
                 if self.is_cancelled(task_id):
-                    self.cleanup_partial_file(target_path)
                     self.task_cancelled.emit(task_id)
                 else:
                     self.task_finished.emit(task_id)
 
             except Exception as e:
                 if str(e) == "CANCELLED":
-                    self.cleanup_partial_file(target_path)
                     self.task_cancelled.emit(task_id)
                 else:
                     self.task_error.emit(task_id, str(e))
@@ -102,6 +101,7 @@ class DownloadWorker(QThread):
 
         os.makedirs(target_path, exist_ok=True)
         children = self.client.list_files(folder_data["id"])
+        reserved_paths = set()
 
         total = len(children)
         if total == 0:
@@ -112,14 +112,27 @@ class DownloadWorker(QThread):
             if self.is_cancelled(task_id):
                 raise Exception("CANCELLED")
 
-            child_path = os.path.join(target_path, child["name"])
+            child_path = unique_path(target_path, child["name"], reserved_paths)
 
             if child.get("mimeType") == FOLDER_MIME:
                 self.download_folder(child, child_path, task_id)
             else:
+                def on_progress(child_percent, downloaded, total_size, speed, eta):
+                    if self.is_cancelled(task_id):
+                        raise Exception("CANCELLED")
+
+                    percent = int(((index - 1) + (child_percent / 100)) / total * 100)
+                    self.task_progress.emit(
+                        task_id,
+                        percent,
+                        self.format_speed(speed),
+                        self.format_eta(eta)
+                    )
+
                 self.client.download_file(
                     child["id"],
                     child_path,
+                    progress_callback=on_progress,
                     cancel_flag=lambda: self.is_cancelled(task_id)
                 )
 
@@ -131,14 +144,6 @@ class DownloadWorker(QThread):
 
     def is_cancelled(self, task_id):
         return (not self.running) or (task_id in self.cancelled_tasks)
-
-    @staticmethod
-    def cleanup_partial_file(path):
-        try:
-            if os.path.isfile(path):
-                os.remove(path)
-        except Exception:
-            pass
 
     @staticmethod
     def format_speed(bytes_per_second):

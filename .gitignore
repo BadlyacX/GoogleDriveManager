@@ -1,3 +1,7 @@
 /credentials.json
 /token.pickle
 /__pycache__
+/build
+/dist
+/.venv
+/main.spec

@@ -1,0 +1,9 @@
+[project]
+name = "googledrivemanager"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "google-api-python-client>=2.196.0",
+    "google-auth-oauthlib>=1.4.0",
+    "pyside6>=6.11.1",
+]

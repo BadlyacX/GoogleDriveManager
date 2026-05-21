@@ -4,6 +4,7 @@ import sys
 import shutil
 import time
 import pickle
+import uuid
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -15,8 +16,14 @@ def get_base_path():
     return os.path.dirname(os.path.abspath(__file__))
 
 def get_appdata_dir():
-    appdata = os.environ.get("APPDATA")
-    base_dir = os.path.join(appdata, "GDM")
+    if os.name == "nt":
+        config_root = os.environ.get("APPDATA") or os.path.expanduser("~")
+    else:
+        config_root = os.environ.get("XDG_CONFIG_HOME")
+        if not config_root:
+            config_root = os.path.join(os.path.expanduser("~"), ".config")
+
+    base_dir = os.path.join(config_root, "GDM")
     os.makedirs(base_dir, exist_ok=True)
     return base_dir
 
@@ -67,7 +74,7 @@ class DriveClient:
                 creds.refresh(Request())
             else:
                 if not os.path.exists(cred_path):
-                    raise Exception("找不到 credentials.json（請放到 AppData\\GDM）")
+                    raise Exception(f"找不到 credentials.json（請放到 {get_appdata_dir()}）")
 
                 flow = InstalledAppFlow.from_client_secrets_file(
                     cred_path,
@@ -81,7 +88,7 @@ class DriveClient:
         return build('drive', 'v3', credentials=creds)
     
     def has_token(self):
-        return os.path.exists("token.pickle")
+        return os.path.exists(get_token_path())
     
     def try_auto_login(self):
         if not self.has_token():
@@ -120,13 +127,15 @@ class DriveClient:
         return file_data.get("mimeType") == FOLDER_MIME
 
     def download_file(self, file_id, path, progress_callback=None, cancel_flag=None, retries=3):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        directory = os.path.dirname(os.path.abspath(path))
+        os.makedirs(directory, exist_ok=True)
 
         for attempt in range(retries):
+            temp_path = f"{path}.part-{uuid.uuid4().hex}"
             try:
                 request = self.service.files().get_media(fileId=file_id)
 
-                with io.FileIO(path, "wb") as fh:
+                with io.FileIO(temp_path, "wb") as fh:
                     downloader = MediaIoBaseDownload(fh, request, chunksize=1024*1024)
 
                     done = False
@@ -150,9 +159,17 @@ class DriveClient:
 
                             progress_callback(progress, downloaded, total, speed, eta)
 
+                os.replace(temp_path, path)
+                if progress_callback:
+                    progress_callback(100, os.path.getsize(path), os.path.getsize(path), 0, 0)
                 return
 
             except Exception as e:
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
                 if str(e) == "CANCELLED":
                     raise
                 if attempt >= retries - 1:
@@ -221,12 +238,4 @@ class DriveClient:
         return res.get("files", [])
     
     def get_credentials_path(self):
-        import os
-        import sys
-
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-
-        return os.path.join(base_dir, "credentials.json")
+        return get_credentials_path()
