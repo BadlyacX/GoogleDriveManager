@@ -5,6 +5,7 @@ import shutil
 import time
 import pickle
 import uuid
+from datetime import datetime, timezone
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -54,6 +55,15 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 FOLDER_MIME = "application/vnd.google-apps.folder"
 BASE_DIR = get_base_path()
 cred_path = os.path.join(BASE_DIR, "credentials.json")
+
+def parse_drive_time(value):
+    if not value:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 class DriveClient:
     def __init__(self):
@@ -110,9 +120,9 @@ class DriveClient:
         while True:
             res = self.service.files().list(
                 q=f"'{folder_id}' in parents and trashed=false",
-                fields="nextPageToken, files(id,name,mimeType,size)",
+                fields="nextPageToken, files(id,name,mimeType,size,modifiedTime)",
                 pageToken=page_token,
-                orderBy="folder,name"
+                orderBy="modifiedTime desc,name"
             ).execute()
 
             files.extend(res.get("files", []))
@@ -120,6 +130,14 @@ class DriveClient:
 
             if not page_token:
                 break
+
+        files.sort(
+            key=lambda file_data: (
+                file_data.get("mimeType") != FOLDER_MIME,
+                -parse_drive_time(file_data.get("modifiedTime")).timestamp(),
+                file_data.get("name", "").lower(),
+            )
+        )
 
         return files
 
